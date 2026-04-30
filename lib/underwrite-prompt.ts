@@ -24,7 +24,19 @@ CRITICAL RULES:
 - Reasoning must reference specific numbers and observations, not vague language.
 - Ledger trend is more important than ledger average. A buyer slipping from 5 to 30 days late over 12 months is more concerning than a buyer who has been steadily 20 days late forever.
 
-Output FORMAT — produce reasoning as natural prose first, then end your response with EXACTLY this block on its own lines:
+Output FORMAT — your response must use these exact markdown headers in this order, then end with the decision block:
+
+## Ledger
+<2-4 sentences on the ledger history. Reference specific numbers.>
+
+## Companies House
+<2-4 sentences on the statutory filings. Reference specific numbers.>
+
+## Specter
+<2-4 sentences on the live company-health signals. Reference specific numbers.>
+
+## Synthesis
+<1-3 sentences synthesising the three sources, especially any conflict.>
 
 <<<DECISION
 verdict: APPROVE | DECLINE | ESCALATE
@@ -35,7 +47,7 @@ key_factors: <semicolon-separated short phrases, max 4>
 escalation_reason: <one sentence if ESCALATE, otherwise empty>
 DECISION>>>
 
-Stream your reasoning naturally as you work through it. Talk through what you see in each data source, then synthesise. End with the decision block.`;
+Keep each section tight — this is read by humans in seconds, not minutes.`;
 
 export type Decision = {
   verdict: "APPROVE" | "DECLINE" | "ESCALATE";

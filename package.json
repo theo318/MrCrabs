@@ -10,9 +10,12 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
+    "@cursor/sdk": "^1.0.11",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "next": "14.2.15",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "tsx": "^4.21.0"
   },
   "devDependencies": {
     "@types/node": "^22.7.4",

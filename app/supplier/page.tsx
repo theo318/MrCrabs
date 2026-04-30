@@ -133,14 +133,6 @@ export default function SupplierPage() {
             })}
           </div>
 
-          <div className="mt-8 hair-t pt-5">
-            <p className="eyebrow mb-2">How this works</p>
-            <p className="text-sm text-[color:var(--ink)]/70 leading-relaxed">
-              Click an invoice to request a cash advance. The underwriting agent reads your ledger
-              history with that buyer, pulls live signals from Specter, cross-references Companies
-              House, and either approves, declines, or escalates to a human credit analyst.
-            </p>
-          </div>
         </aside>
 
         {/* RIGHT — workspace */}
@@ -150,42 +142,61 @@ export default function SupplierPage() {
           )}
 
           {selectedInvoice && selectedBuyer && (
-            <div className="space-y-8">
+            <div className="space-y-6">
               {/* Header strip */}
-              <div className="rule-b pb-5">
-                <p className="eyebrow mb-2">Underwriting · {selectedInvoice.invoiceNumber}</p>
-                <h1 className="font-serif text-4xl leading-tight">
-                  {selectedBuyer.name}
-                </h1>
-                <p className="text-[color:var(--ink)]/70 mt-1">
-                  {selectedBuyer.industry} · CH#{selectedBuyer.companiesHouseNumber}
-                </p>
+              <div className="rule-b pb-5 flex items-end justify-between gap-4">
+                <div>
+                  <p className="eyebrow mb-2">Underwriting</p>
+                  <h1 className="font-serif text-4xl leading-tight">{selectedBuyer.name}</h1>
+                  <p className="text-[color:var(--ink)]/70 mt-1">
+                    Invoice number: {selectedInvoice.invoiceNumber}
+                  </p>
+                </div>
+                {state.running && (
+                  <p className="font-mono text-xs text-signal cursor-blink">STREAMING</p>
+                )}
               </div>
 
-              {/* Data sources panel */}
-              {state.context && <DataSourcesPanel context={state.context} />}
-
-              {/* Reasoning stream */}
-              <div>
-                <div className="flex items-baseline justify-between mb-3">
-                  <p className="eyebrow">Agent reasoning · live</p>
-                  {state.running && <p className="font-mono text-xs text-signal">STREAMING</p>}
+              {/* Three source cards — vertically stacked, big, color-coded by status */}
+              {state.context && (
+                <div ref={reasoningRef} className="space-y-5">
+                  {(() => {
+                    const sections = splitReasoningBySource(state.reasoning);
+                    const ctx = state.context;
+                    const ledgerStat = ledgerStatus(ctx.ledger);
+                    const chStat = chStatus(ctx.companiesHouse);
+                    const spStat = specterStatus(ctx.specter.signals);
+                    return (
+                      <>
+                        <SourceCard
+                          title="Ledger"
+                          statLine={ledgerStatLine(ctx.ledger)}
+                          status={ledgerStat}
+                          whyLine={ledgerWhy(ctx.ledger, ledgerStat)}
+                          reasoning={sections.ledger}
+                          running={state.running}
+                        />
+                        <SourceCard
+                          title="Companies House"
+                          statLine={chStatLine(ctx.companiesHouse)}
+                          status={chStat}
+                          whyLine={chWhy(ctx.companiesHouse, chStat)}
+                          reasoning={sections.companiesHouse}
+                          running={state.running}
+                        />
+                        <SourceCard
+                          title="Specter"
+                          statLine={specterStatLine(ctx.specter)}
+                          status={spStat}
+                          whyLine={specterWhy(ctx.specter.signals, spStat)}
+                          reasoning={sections.specter}
+                          running={state.running}
+                        />
+                      </>
+                    );
+                  })()}
                 </div>
-                <div
-                  ref={reasoningRef}
-                  className="border border-faint p-6 min-h-[240px] max-h-[420px] overflow-y-auto bg-white/40"
-                >
-                  {displayedReasoning ? (
-                    <div className={`font-serif text-[17px] leading-[1.65] whitespace-pre-wrap ${state.running ? "cursor-blink" : ""}`}>
-                      {displayedReasoning}
-                    </div>
-                  ) : (
-                    <div className="text-muted font-mono text-sm">
-                      {state.running ? "Connecting to data sources…" : "Awaiting analysis."}
-                    </div>
-                  )}
-                </div>
-              </div>
+              )}
 
               {/* Decision card */}
               {state.decision && <DecisionCard caseData={state.decision.case} />}
@@ -216,98 +227,164 @@ function EmptyState() {
   );
 }
 
-function DataSourcesPanel({ context }: { context: any }) {
-  const ls = context.ledger;
-  const sp = context.specter;
-  const ch = context.companiesHouse;
-  const trendArrow = ls.trendDelta > 1 ? "↑" : ls.trendDelta < -1 ? "↓" : "→";
+type Status = "pass" | "warn" | "fail";
 
+const STATUS_PALETTE: Record<Status, { color: string; label: string }> = {
+  pass: { color: "var(--approve)", label: "CLEAN" },
+  warn: { color: "var(--signal)", label: "CONCERN" },
+  fail: { color: "var(--decline)", label: "FAIL" },
+};
+
+function SourceCard({
+  title,
+  statLine,
+  status,
+  whyLine,
+  reasoning,
+  running,
+}: {
+  title: string;
+  statLine: string;
+  status: Status;
+  whyLine: string | null;
+  reasoning: string;
+  running: boolean;
+}) {
+  const palette = STATUS_PALETTE[status];
+  const isPending = running && !reasoning;
   return (
-    <div className="grid grid-cols-3 gap-px bg-faint border border-faint">
-      {/* LEDGER */}
-      <div className="bg-paper p-5">
-        <p className="eyebrow mb-4">01 · Ledger</p>
-        <Stat label="Months trading" value={ls.relationshipMonths.toString()} />
-        <Stat label="Avg days late" value={ls.avgDaysLate.toString()} />
-        <Stat
-          label="Last 4 vs prev 4"
-          value={`${ls.lastAvg} ${trendArrow} ${ls.prevAvg}`}
-          tone={ls.trendDelta > 5 ? "warn" : ls.trendDelta < -2 ? "good" : "neutral"}
-        />
-        <Stat label="Total revenue" value={`£${(ls.totalRevenue / 1000).toFixed(0)}k`} />
-      </div>
-
-      {/* SPECTER */}
-      <div className="bg-paper p-5">
-        <div className="flex items-baseline justify-between mb-4">
-          <p className="eyebrow">02 · Specter</p>
-          <span className="font-mono text-[10px] text-muted uppercase">{sp.source}</span>
+    <div
+      className="border-2 p-7 bg-white/40 rise"
+      style={{ borderColor: palette.color }}
+    >
+      <div className="flex items-start justify-between gap-4 mb-3">
+        <div>
+          <h2
+            className="font-serif text-5xl tracking-tight leading-none"
+            style={{ color: palette.color }}
+          >
+            {title}
+          </h2>
+          {whyLine && (
+            <p
+              className="font-mono text-sm mt-3 uppercase tracking-wide"
+              style={{ color: palette.color }}
+            >
+              {whyLine}
+            </p>
+          )}
         </div>
-        <Stat label="Health score" value={`${sp.signals.health_score}/100`} tone={scoreTone(sp.signals.health_score)} />
-        <Stat
-          label="Headcount Δ 90d"
-          value={`${sp.signals.headcount_growth_90d_pct > 0 ? "+" : ""}${sp.signals.headcount_growth_90d_pct.toFixed(1)}%`}
-          tone={sp.signals.headcount_growth_90d_pct < -5 ? "warn" : sp.signals.headcount_growth_90d_pct > 0 ? "good" : "neutral"}
-        />
-        <Stat
-          label="Web traffic Δ 90d"
-          value={`${sp.signals.web_traffic_growth_90d_pct > 0 ? "+" : ""}${sp.signals.web_traffic_growth_90d_pct.toFixed(1)}%`}
-          tone={sp.signals.web_traffic_growth_90d_pct < -10 ? "warn" : "neutral"}
-        />
-        <Stat
-          label="News sentiment 30d"
-          value={sp.signals.news_sentiment_30d.toFixed(2)}
-          tone={sp.signals.news_sentiment_30d < -0.1 ? "warn" : sp.signals.news_sentiment_30d > 0.2 ? "good" : "neutral"}
-        />
-        {sp.signals.notable_events_90d.length > 0 && (
-          <div className="mt-3 pt-3 hair-t">
-            <p className="eyebrow mb-2 text-[9px]">Notable events</p>
-            <ul className="text-xs space-y-1 text-[color:var(--ink)]/80">
-              {sp.signals.notable_events_90d.slice(0, 3).map((e: string, i: number) => (
-                <li key={i} className="leading-snug">— {e}</li>
-              ))}
-            </ul>
-          </div>
+        <span
+          className="pill shrink-0"
+          style={{ color: palette.color, borderColor: palette.color }}
+        >
+          {palette.label}
+        </span>
+      </div>
+      <p className="font-mono text-sm text-[color:var(--ink)]/75 mb-5">{statLine}</p>
+      <div className="font-serif text-[17px] leading-[1.6] whitespace-pre-wrap min-h-[64px]">
+        {reasoning ? (
+          <span className={isPending ? "" : ""}>{reasoning}</span>
+        ) : (
+          <span className="text-muted italic font-sans text-sm">
+            {running ? "Awaiting analysis…" : "—"}
+          </span>
         )}
       </div>
-
-      {/* COMPANIES HOUSE */}
-      <div className="bg-paper p-5">
-        <p className="eyebrow mb-4">03 · Companies House</p>
-        <Stat
-          label="Filings on time"
-          value={ch.filingsOnTime ? "Yes" : "No"}
-          tone={ch.filingsOnTime ? "good" : "warn"}
-        />
-        <Stat label="Last accounts" value={ch.lastAccountsFiled} />
-        <Stat label="CCJs" value={ch.ccjs.toString()} tone={ch.ccjs > 0 ? "warn" : "neutral"} />
-        <Stat
-          label="Net assets"
-          value={`£${(ch.netAssets / 1_000_000).toFixed(2)}m`}
-          tone={ch.netAssets < 0 ? "warn" : "neutral"}
-        />
-      </div>
     </div>
   );
 }
 
-function scoreTone(s: number): "good" | "warn" | "neutral" {
-  if (s >= 70) return "good";
-  if (s < 40) return "warn";
-  return "neutral";
+// Split the agent's streaming reasoning into per-source sections by `## ` markdown
+// headers. Tolerates partial last section (still streaming) and varied phrasing
+// like "## Ledger History Analysis" — matches on substring.
+function splitReasoningBySource(text: string): {
+  ledger: string;
+  companiesHouse: string;
+  specter: string;
+} {
+  const sections = { ledger: "", companiesHouse: "", specter: "" };
+  if (!text) return sections;
+  const re = /^##\s+(.+?)$([\s\S]*?)(?=^##\s|$)/gim;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const header = m[1].toLowerCase();
+    const body = m[2].trim();
+    if (/ledger/.test(header)) {
+      sections.ledger = sections.ledger ? `${sections.ledger}\n\n${body}` : body;
+    } else if (/companies\s*house/.test(header)) {
+      sections.companiesHouse = sections.companiesHouse
+        ? `${sections.companiesHouse}\n\n${body}`
+        : body;
+    } else if (/specter/.test(header)) {
+      sections.specter = sections.specter ? `${sections.specter}\n\n${body}` : body;
+    }
+  }
+  return sections;
 }
 
-function Stat({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "good" | "warn" | "neutral" }) {
-  const colour =
-    tone === "good" ? "var(--approve)" : tone === "warn" ? "var(--decline)" : "var(--ink)";
-  return (
-    <div className="flex justify-between items-baseline py-1.5 hair-b last:border-0">
-      <span className="text-xs text-muted">{label}</span>
-      <span className="font-mono text-sm" style={{ color: colour }}>
-        {value}
-      </span>
-    </div>
-  );
+// ---- Status helpers (deterministic, derived from the data context) ----
+
+function ledgerStatus(l: any): Status {
+  if (l.overdueCount >= 2 || l.trendDelta >= 25) return "fail";
+  if (l.overdueCount >= 1 || l.trendDelta >= 8) return "warn";
+  return "pass";
+}
+
+function chStatus(ch: any): Status {
+  if (ch.ccjs > 0 || ch.netAssets < 0 || !ch.filingsOnTime) return "fail";
+  return "pass";
+}
+
+function specterStatus(s: any): Status {
+  if (s.health_score < 40 || s.headcount_growth_90d_pct <= -20) return "fail";
+  if (s.health_score < 65 || s.headcount_growth_90d_pct < -5 || s.web_traffic_growth_90d_pct < -15)
+    return "warn";
+  return "pass";
+}
+
+function fmtSigned(n: number, suffix = "") {
+  return `${n > 0 ? "+" : ""}${n.toFixed(1)}${suffix}`;
+}
+
+function ledgerStatLine(l: any) {
+  return `${l.paidCount}/${l.totalInvoices} paid · ${l.overdueCount} overdue · trend ${fmtSigned(l.trendDelta, "d")} · revenue £${(l.totalRevenue / 1000).toFixed(0)}k`;
+}
+
+function chStatLine(ch: any) {
+  return `Filings ${ch.filingsOnTime ? "on time" : "LATE"} · ${ch.ccjs} CCJ${ch.ccjs === 1 ? "" : "s"} · £${(ch.netAssets / 1_000_000).toFixed(2)}m net assets · last accounts ${ch.lastAccountsFiled}`;
+}
+
+function specterStatLine(sp: any) {
+  const s = sp.signals;
+  return `Health ${s.health_score}/100 · headcount ${fmtSigned(s.headcount_growth_90d_pct, "%")} · traffic ${fmtSigned(s.web_traffic_growth_90d_pct, "%")} · sentiment ${s.news_sentiment_30d.toFixed(2)} · ${sp.source}`;
+}
+
+function ledgerWhy(l: any, status: Status) {
+  if (status === "pass") return null;
+  const bits: string[] = [];
+  if (l.overdueCount >= 1) bits.push(`${l.overdueCount} invoice${l.overdueCount === 1 ? "" : "s"} overdue`);
+  if (l.trendDelta >= 8) bits.push(`payment lag accelerating ${fmtSigned(l.trendDelta, "d")}`);
+  return bits.length ? bits.join(" · ") : null;
+}
+
+function chWhy(ch: any, status: Status) {
+  if (status === "pass") return null;
+  const bits: string[] = [];
+  if (ch.ccjs > 0) bits.push(`${ch.ccjs} CCJ${ch.ccjs === 1 ? "" : "s"}`);
+  if (ch.netAssets < 0) bits.push("negative net assets");
+  if (!ch.filingsOnTime) bits.push("filings overdue");
+  return bits.length ? bits.join(" · ") : null;
+}
+
+function specterWhy(s: any, status: Status) {
+  if (status === "pass") return null;
+  const bits: string[] = [];
+  if (s.health_score < 40) bits.push(`health critical ${s.health_score}/100`);
+  else if (s.health_score < 65) bits.push(`health weakening ${s.health_score}/100`);
+  if (s.headcount_growth_90d_pct < -5) bits.push(`headcount ${fmtSigned(s.headcount_growth_90d_pct, "%")}`);
+  if (s.web_traffic_growth_90d_pct < -15) bits.push(`traffic ${fmtSigned(s.web_traffic_growth_90d_pct, "%")}`);
+  return bits.length ? bits.join(" · ") : null;
 }
 
 function DecisionCard({ caseData }: { caseData: any }) {

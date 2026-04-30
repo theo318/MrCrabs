@@ -1,87 +1,129 @@
 import Link from "next/link";
 
+function Crab({ size = 120 }: { size?: number }) {
+  return (
+    <svg
+      viewBox="0 0 120 120"
+      width={size}
+      height={size}
+      aria-label="Mr Crabs"
+      role="img"
+      style={{ display: "block" }}
+    >
+      {/* left claw arm */}
+      <path
+        d="M30 70 Q12 58 14 36"
+        stroke="#0a0a0a"
+        strokeWidth="3"
+        fill="none"
+        strokeLinecap="round"
+      />
+      {/* right claw arm */}
+      <path
+        d="M90 70 Q108 58 106 36"
+        stroke="#0a0a0a"
+        strokeWidth="3"
+        fill="none"
+        strokeLinecap="round"
+      />
+      {/* legs left */}
+      <path d="M30 80 L14 92" stroke="#0a0a0a" strokeWidth="3" fill="none" strokeLinecap="round" />
+      <path d="M34 88 L20 104" stroke="#0a0a0a" strokeWidth="3" fill="none" strokeLinecap="round" />
+      <path d="M42 92 L34 110" stroke="#0a0a0a" strokeWidth="3" fill="none" strokeLinecap="round" />
+      {/* legs right */}
+      <path d="M90 80 L106 92" stroke="#0a0a0a" strokeWidth="3" fill="none" strokeLinecap="round" />
+      <path d="M86 88 L100 104" stroke="#0a0a0a" strokeWidth="3" fill="none" strokeLinecap="round" />
+      <path d="M78 92 L86 110" stroke="#0a0a0a" strokeWidth="3" fill="none" strokeLinecap="round" />
+      {/* body */}
+      <ellipse cx="60" cy="76" rx="34" ry="22" fill="#ff5b3a" stroke="#0a0a0a" strokeWidth="3" />
+      {/* belly highlight */}
+      <ellipse cx="60" cy="84" rx="22" ry="9" fill="#ffb59c" opacity="0.65" />
+      {/* mouth */}
+      <path
+        d="M50 82 Q60 90 70 82"
+        stroke="#0a0a0a"
+        strokeWidth="2.5"
+        fill="none"
+        strokeLinecap="round"
+      />
+      {/* eye stalks */}
+      <line x1="50" y1="58" x2="48" y2="40" stroke="#0a0a0a" strokeWidth="3" strokeLinecap="round" />
+      <line x1="70" y1="58" x2="72" y2="40" stroke="#0a0a0a" strokeWidth="3" strokeLinecap="round" />
+      {/* eyes */}
+      <circle cx="48" cy="36" r="7" fill="#fff" stroke="#0a0a0a" strokeWidth="2.5" />
+      <circle cx="72" cy="36" r="7" fill="#fff" stroke="#0a0a0a" strokeWidth="2.5" />
+      <circle cx="49" cy="37" r="3" fill="#0a0a0a" />
+      <circle cx="73" cy="37" r="3" fill="#0a0a0a" />
+      {/* claws — left */}
+      <g transform="translate(14 36) rotate(-15)">
+        <path
+          d="M-12 -10 Q -2 -16 8 -10 Q 4 -2 -2 0 Z"
+          fill="#ff5b3a"
+          stroke="#0a0a0a"
+          strokeWidth="2.5"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M-12 -10 Q -6 -6 0 -8 Q -4 -2 -8 0 Z"
+          fill="#ff8b6f"
+          stroke="#0a0a0a"
+          strokeWidth="2"
+          strokeLinejoin="round"
+        />
+      </g>
+      {/* claws — right (mirrored) */}
+      <g transform="translate(106 36) rotate(15) scale(-1 1)">
+        <path
+          d="M-12 -10 Q -2 -16 8 -10 Q 4 -2 -2 0 Z"
+          fill="#ff5b3a"
+          stroke="#0a0a0a"
+          strokeWidth="2.5"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M-12 -10 Q -6 -6 0 -8 Q -4 -2 -8 0 Z"
+          fill="#ff8b6f"
+          stroke="#0a0a0a"
+          strokeWidth="2"
+          strokeLinejoin="round"
+        />
+      </g>
+    </svg>
+  );
+}
+
 export default function Home() {
   return (
     <main className="min-h-screen flex flex-col">
-      {/* Top masthead */}
-      <header className="rule-b">
-        <div className="max-w-[1200px] mx-auto px-8 py-5 flex items-baseline justify-between">
-          <div className="flex items-baseline gap-3">
-            <span className="font-serif text-2xl tracking-tight">FlowFi</span>
-            <span className="eyebrow">London · Apr 30 · 2026</span>
-          </div>
-          <div className="eyebrow">Cursor × Briefcase Hackathon</div>
-        </div>
-      </header>
+      <section className="flex-1 flex flex-col items-center justify-center px-8 py-20 text-center rise rise-1">
+        <Crab size={140} />
+        <h1
+          className="font-bubble mt-6 text-[clamp(72px,14vw,160px)] leading-[0.95]"
+          style={{ color: "var(--signal)" }}
+        >
+          Mr Crabs
+        </h1>
+        <p className="mt-8 max-w-[680px] font-serif text-[clamp(20px,2.4vw,30px)] leading-snug">
+          Making B2B payments instant with agentic underwriting.
+        </p>
 
-      {/* Hero */}
-      <section className="max-w-[1200px] mx-auto px-8 py-20 grid grid-cols-12 gap-8 items-end rise rise-1">
-        <div className="col-span-12 md:col-span-8">
-          <p className="eyebrow mb-6">Track 02 · Financial Intelligence</p>
-          <h1 className="font-serif text-[64px] leading-[1.05] tracking-tight">
-            The agent that knows
-            <br />
-            <em className="not-italic" style={{ color: "var(--signal)" }}>when not</em> to decide.
-          </h1>
-          <p className="mt-8 max-w-[560px] text-lg leading-[1.55] text-[color:var(--ink)]/80">
-            FlowFi underwrites B2B invoices in seconds by synthesising the supplier's ledger,
-            live company-health signals from <span className="font-mono text-sm">Specter</span>, and
-            UK statutory filings. It approves the easy ones, declines the obvious ones, and escalates
-            the borderline cases — with the reasoning a human credit analyst can actually verify.
-          </p>
-        </div>
-        <div className="col-span-12 md:col-span-4">
-          <div className="hair-t hair-b py-6">
-            <p className="eyebrow mb-3">The thesis</p>
-            <p className="font-serif text-xl leading-snug">
-              Human-out-of-the-loop fails when the agent doesn't know what it doesn't know. Confidence
-              calibration is the product.
-            </p>
-          </div>
+        <div className="mt-16 grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-[760px]">
+          <Link
+            href="/supplier"
+            className="group block rule-t pt-5 pb-6 px-5 hover:bg-soft transition rise rise-2 text-left"
+          >
+            <div className="eyebrow mb-3">Supplier console</div>
+            <span className="font-serif text-2xl">Request an advance →</span>
+          </Link>
+          <Link
+            href="/analyst"
+            className="group block rule-t pt-5 pb-6 px-5 hover:bg-soft transition rise rise-3 text-left"
+          >
+            <div className="eyebrow mb-3">Analyst desk</div>
+            <span className="font-serif text-2xl">Review escalations →</span>
+          </Link>
         </div>
       </section>
-
-      {/* Entry points */}
-      <section className="max-w-[1200px] mx-auto px-8 pb-24 grid grid-cols-12 gap-6">
-        <Link
-          href="/supplier"
-          className="col-span-12 md:col-span-6 group block rule-t pt-6 pb-8 hover:bg-soft transition rise rise-2"
-        >
-          <div className="flex items-baseline justify-between mb-6">
-            <span className="eyebrow">View 01</span>
-            <span className="font-mono text-xs text-muted">/supplier</span>
-          </div>
-          <h2 className="font-serif text-3xl leading-tight mb-3">Supplier console</h2>
-          <p className="text-[color:var(--ink)]/70 mb-6 leading-snug">
-            Acme Marketing has three outstanding invoices. Pick one and request a cash advance. Watch the
-            underwriting agent reason live.
-          </p>
-          <span className="font-mono text-sm group-hover:text-signal transition">Open console →</span>
-        </Link>
-
-        <Link
-          href="/analyst"
-          className="col-span-12 md:col-span-6 group block rule-t pt-6 pb-8 hover:bg-soft transition rise rise-3"
-        >
-          <div className="flex items-baseline justify-between mb-6">
-            <span className="eyebrow">View 02</span>
-            <span className="font-mono text-xs text-muted">/analyst</span>
-          </div>
-          <h2 className="font-serif text-3xl leading-tight mb-3">Credit analyst desk</h2>
-          <p className="text-[color:var(--ink)]/70 mb-6 leading-snug">
-            Cases the agent escalated. See exactly why it stopped, the conflicting signals, and override
-            with a documented decision.
-          </p>
-          <span className="font-mono text-sm group-hover:text-signal transition">Open desk →</span>
-        </Link>
-      </section>
-
-      <footer className="mt-auto rule-t">
-        <div className="max-w-[1200px] mx-auto px-8 py-5 flex justify-between items-baseline">
-          <span className="eyebrow">FlowFi · Demo · Halkin Offices</span>
-          <span className="font-mono text-xs text-muted">Built on Cursor · Specter MCP · Anthropic</span>
-        </div>
-      </footer>
     </main>
   );
 }
