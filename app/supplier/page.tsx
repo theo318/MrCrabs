@@ -6,12 +6,16 @@ import { SUPPLIER, getBuyer } from "@/lib/mock-data";
 import type { Decision } from "@/lib/underwrite-prompt";
 import { Topbar, Footer } from "@/components/Chrome";
 
+type FetchStatus = "idle" | "fetching" | "fetched";
+type SourceKey = "ledger" | "companiesHouse" | "specter";
+
 type StreamState = {
   running: boolean;
   reasoning: string;
   context: any | null;
   decision: { case: any } | null;
   error: string | null;
+  fetchStatus: Record<SourceKey, FetchStatus>;
 };
 
 const initialState: StreamState = {
@@ -20,6 +24,13 @@ const initialState: StreamState = {
   context: null,
   decision: null,
   error: null,
+  fetchStatus: { ledger: "idle", companiesHouse: "idle", specter: "idle" },
+};
+
+const TOOL_TO_SOURCE: Record<string, SourceKey> = {
+  getLedgerHistory: "ledger",
+  getCompaniesHouse: "companiesHouse",
+  getSpecterSignals: "specter",
 };
 
 export default function SupplierPage() {
@@ -72,12 +83,32 @@ export default function SupplierPage() {
           setState((s) => ({ ...s, context: data }));
         } else if (eventName === "delta") {
           setState((s) => ({ ...s, reasoning: s.reasoning + data.text }));
+        } else if (eventName === "tool_call") {
+          const src = TOOL_TO_SOURCE[data.tool];
+          if (src) {
+            setState((s) => ({ ...s, fetchStatus: { ...s.fetchStatus, [src]: "fetching" } }));
+          }
+        } else if (eventName === "tool_result") {
+          const src = TOOL_TO_SOURCE[data.tool];
+          if (src) {
+            setState((s) => ({ ...s, fetchStatus: { ...s.fetchStatus, [src]: "fetched" } }));
+          }
         } else if (eventName === "decision") {
           setState((s) => ({ ...s, decision: data }));
         } else if (eventName === "error") {
           setState((s) => ({ ...s, error: data.message, running: false }));
         } else if (eventName === "done") {
-          setState((s) => ({ ...s, running: false }));
+          // On stream end, mark any sources still idle as fetched so stats reveal
+          // (covers the Anthropic fallback path where no tool events fire).
+          setState((s) => ({
+            ...s,
+            running: false,
+            fetchStatus: {
+              ledger: s.fetchStatus.ledger === "idle" ? "fetched" : s.fetchStatus.ledger,
+              companiesHouse: s.fetchStatus.companiesHouse === "idle" ? "fetched" : s.fetchStatus.companiesHouse,
+              specter: s.fetchStatus.specter === "idle" ? "fetched" : s.fetchStatus.specter,
+            },
+          }));
         }
       }
     }
@@ -170,6 +201,8 @@ export default function SupplierPage() {
                       <>
                         <SourceCard
                           title="Ledger"
+                          fetchLabel="Reading ledger history"
+                          fetchStatus={state.fetchStatus.ledger}
                           statLine={ledgerStatLine(ctx.ledger)}
                           status={ledgerStat}
                           whyLine={ledgerWhy(ctx.ledger, ledgerStat)}
@@ -178,6 +211,8 @@ export default function SupplierPage() {
                         />
                         <SourceCard
                           title="Companies House"
+                          fetchLabel="Querying Companies House"
+                          fetchStatus={state.fetchStatus.companiesHouse}
                           statLine={chStatLine(ctx.companiesHouse)}
                           status={chStat}
                           whyLine={chWhy(ctx.companiesHouse, chStat)}
@@ -186,6 +221,8 @@ export default function SupplierPage() {
                         />
                         <SourceCard
                           title="Specter"
+                          fetchLabel="Querying Specter live"
+                          fetchStatus={state.fetchStatus.specter}
                           statLine={specterStatLine(ctx.specter)}
                           status={spStat}
                           whyLine={specterWhy(ctx.specter.signals, spStat)}
@@ -237,6 +274,8 @@ const STATUS_PALETTE: Record<Status, { color: string; label: string }> = {
 
 function SourceCard({
   title,
+  fetchLabel,
+  fetchStatus,
   statLine,
   status,
   whyLine,
@@ -244,28 +283,35 @@ function SourceCard({
   running,
 }: {
   title: string;
+  fetchLabel: string;
+  fetchStatus: FetchStatus;
   statLine: string;
   status: Status;
   whyLine: string | null;
   reasoning: string;
   running: boolean;
 }) {
-  const palette = STATUS_PALETTE[status];
-  const isPending = running && !reasoning;
+  // Until the agent has fetched THIS source, hide the verdict colour and stats
+  // so the analysis feels live. Once fetched (or once the run is complete), the
+  // card transitions to its full coloured state.
+  const dataRevealed = fetchStatus === "fetched" || !running;
+  const palette = dataRevealed ? STATUS_PALETTE[status] : STATUS_PALETTE.pass;
+  const borderColour = dataRevealed ? palette.color : "var(--faint)";
+
   return (
     <div
-      className="border-2 p-7 bg-white/40 rise"
-      style={{ borderColor: palette.color }}
+      className="border-2 p-7 bg-white/40 rise transition-[border-color] duration-300"
+      style={{ borderColor: borderColour }}
     >
       <div className="flex items-start justify-between gap-4 mb-3">
-        <div>
+        <div className="flex-1 min-w-0">
           <h2
-            className="font-serif text-5xl tracking-tight leading-none"
-            style={{ color: palette.color }}
+            className="font-serif text-5xl tracking-tight leading-none transition-colors duration-300"
+            style={{ color: dataRevealed ? palette.color : "var(--ink)" }}
           >
             {title}
           </h2>
-          {whyLine && (
+          {dataRevealed && whyLine && (
             <p
               className="font-mono text-sm mt-3 uppercase tracking-wide"
               style={{ color: palette.color }}
@@ -274,17 +320,22 @@ function SourceCard({
             </p>
           )}
         </div>
-        <span
-          className="pill shrink-0"
-          style={{ color: palette.color, borderColor: palette.color }}
-        >
-          {palette.label}
-        </span>
+        <FetchBadge
+          status={fetchStatus}
+          fetchLabel={fetchLabel}
+          verdictColour={palette.color}
+          verdictLabel={palette.label}
+          dataRevealed={dataRevealed}
+        />
       </div>
-      <p className="font-mono text-sm text-[color:var(--ink)]/75 mb-5">{statLine}</p>
+
+      <p className="font-mono text-sm text-[color:var(--ink)]/75 mb-5 min-h-[20px]">
+        {dataRevealed ? statLine : <span className="text-muted">— awaiting data —</span>}
+      </p>
+
       <div className="font-serif text-[17px] leading-[1.6] whitespace-pre-wrap min-h-[64px]">
         {reasoning ? (
-          <span className={isPending ? "" : ""}>{reasoning}</span>
+          reasoning
         ) : (
           <span className="text-muted italic font-sans text-sm">
             {running ? "Awaiting analysis…" : "—"}
@@ -292,6 +343,51 @@ function SourceCard({
         )}
       </div>
     </div>
+  );
+}
+
+function FetchBadge({
+  status,
+  fetchLabel,
+  verdictColour,
+  verdictLabel,
+  dataRevealed,
+}: {
+  status: FetchStatus;
+  fetchLabel: string;
+  verdictColour: string;
+  verdictLabel: string;
+  dataRevealed: boolean;
+}) {
+  if (dataRevealed) {
+    return (
+      <span
+        className="pill shrink-0"
+        style={{ color: verdictColour, borderColor: verdictColour }}
+      >
+        {verdictLabel}
+      </span>
+    );
+  }
+  if (status === "fetching") {
+    return (
+      <span
+        className="pill shrink-0 inline-flex items-center gap-2"
+        style={{ color: "var(--signal)", borderColor: "var(--signal)" }}
+      >
+        <span className="fetch-dot" />
+        {fetchLabel}…
+      </span>
+    );
+  }
+  return (
+    <span
+      className="pill shrink-0 inline-flex items-center gap-2"
+      style={{ color: "var(--muted)", borderColor: "var(--faint)" }}
+    >
+      <span className="fetch-dot fetch-dot-idle" />
+      Awaiting query
+    </span>
   );
 }
 
