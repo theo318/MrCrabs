@@ -1,0 +1,126 @@
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500;9..144,600;9..144,700&family=JetBrains+Mono:wght@400;500;600&family=Inter+Tight:wght@300;400;500;600&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --paper: #faf9f6;
+  --ink: #0a0a0a;
+  --rule: #1a1a1a;
+  --muted: #6b6b6b;
+  --faint: #d4d2cc;
+  --soft: #efede6;
+  --approve: #1f6e3d;
+  --decline: #a8202a;
+  --escalate: #1a2c5c;
+  --signal: #c84b17;
+}
+
+html,
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "Inter Tight", system-ui, sans-serif;
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.font-serif {
+  font-family: "Fraunces", "Iowan Old Style", Georgia, serif;
+  font-feature-settings: "ss01", "ss02";
+}
+
+.font-mono {
+  font-family: "JetBrains Mono", "IBM Plex Mono", monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.eyebrow {
+  font-family: "JetBrains Mono", monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.rule-t {
+  border-top: 1px solid var(--rule);
+}
+.rule-b {
+  border-bottom: 1px solid var(--rule);
+}
+.hair-t {
+  border-top: 1px solid var(--faint);
+}
+.hair-b {
+  border-bottom: 1px solid var(--faint);
+}
+
+/* Reasoning stream: typewriter cursor */
+.cursor-blink::after {
+  content: "▌";
+  margin-left: 2px;
+  animation: blink 1s steps(2, start) infinite;
+  color: var(--signal);
+}
+@keyframes blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+/* Confidence bar */
+.confidence-bar {
+  height: 4px;
+  background: var(--soft);
+  position: relative;
+  overflow: hidden;
+}
+.confidence-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--ink);
+  transition: width 600ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* Page-load stagger */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.rise {
+  animation: rise 600ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.rise-1 {
+  animation-delay: 50ms;
+}
+.rise-2 {
+  animation-delay: 120ms;
+}
+.rise-3 {
+  animation-delay: 200ms;
+}
+.rise-4 {
+  animation-delay: 280ms;
+}
+
+/* Status pills */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding: 4px 8px;
+  border: 1px solid currentColor;
+}
