@@ -103,6 +103,23 @@ export const SUPPLIER: Supplier = {
         { invoiceNumber: "ACM-1240", issued: "2026-03-15", due: "2026-04-14", paid: null, amount: 9100, status: "overdue", daysLate: 16 },
       ],
     },
+    // ---- BUYER D: Real Xero data, anonymised at the agent-tools boundary ----
+    // The fields here are placeholders — only used by the supplier UI to render
+    // the tile header (name + industry). Ledger is left empty: getLedgerHistory
+    // / getCompaniesHouse / getSpecterSignals all reroute to lib/real-data.ts
+    // when buyer_id === "buy-real-1".
+    {
+      id: "buy-real-1",
+      name: "Buyer · UK automotive marketplace",
+      companiesHouseNumber: "0XXXXXXX",
+      domain: "anonymised.example",
+      industry: "Online vehicle marketplace",
+      filingsOnTime: true,
+      lastAccountsFiled: "2025-09-30",
+      ccjs: 0,
+      netAssets: 0,
+      ledger: [],
+    },
     // ---- BUYER C: Clear DECLINE ----
     {
       id: "buy-corvid",
@@ -134,13 +151,13 @@ export const SUPPLIER: Supplier = {
       description: "Q2 retainer — performance marketing",
     },
     {
-      id: "inv-1261",
-      invoiceNumber: "ACM-1261",
+      id: "inv-1263",
+      invoiceNumber: "ACM-1263",
       issued: "2026-04-22",
       due: "2026-05-22",
-      amount: 9100,
-      buyerId: "buy-merivale",
-      description: "April campaign + creative production",
+      amount: 7000,
+      buyerId: "buy-real-1",
+      description: "Live Xero · real underwriting case",
     },
     {
       id: "inv-1262",

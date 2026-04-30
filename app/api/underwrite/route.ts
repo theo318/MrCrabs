@@ -4,9 +4,10 @@ import { tmpdir } from "node:os";
 import Anthropic from "@anthropic-ai/sdk";
 import { Agent } from "@cursor/sdk";
 import { NextRequest } from "next/server";
-import { SUPPLIER, getInvoice, getBuyer, ledgerSummary } from "@/lib/mock-data";
+import { SUPPLIER, getInvoice, getBuyer, ledgerSummary, type LedgerLine } from "@/lib/mock-data";
 import { SYSTEM_PROMPT, buildUserMessage, parseDecision } from "@/lib/underwrite-prompt";
-import { fetchSpecter } from "@/lib/specter";
+import { fetchSpecter, type SpecterResponse } from "@/lib/specter";
+import { realDataOrFallback } from "@/lib/real-data";
 import { cases, type Case } from "@/lib/store";
 
 export const runtime = "nodejs";
@@ -61,6 +62,37 @@ key_factors: <semicolon-separated phrases, max 4>
 escalation_reason: <one sentence if ESCALATE, otherwise empty>
 DECISION>>>`;
 
+// Loads everything the UI panels + agent prompt need for a given buyer.
+// For "buy-real-1" this routes through lib/real-data → live Xero (anonymised).
+// For all other buyers it reads lib/mock-data + lib/specter as before.
+async function loadPanels(buyer: NonNullable<ReturnType<typeof getBuyer>>) {
+  if (buyer.id === "buy-real-1") {
+    const bundle = await realDataOrFallback();
+    return {
+      ledger: bundle.ledger.summary,
+      recentLedger: bundle.ledger.recentLines,
+      specter: bundle.specter,
+      chSnapshot: {
+        filingsOnTime: bundle.ch.filingsOnTime,
+        lastAccountsFiled: bundle.ch.lastAccountsFiled,
+        ccjs: bundle.ch.ccjs,
+        netAssets: bundle.ch.netAssets,
+      },
+    };
+  }
+  return {
+    ledger: ledgerSummary(buyer),
+    recentLedger: buyer.ledger.slice(-8),
+    specter: await fetchSpecter(buyer.domain, buyer.name),
+    chSnapshot: {
+      filingsOnTime: buyer.filingsOnTime,
+      lastAccountsFiled: buyer.lastAccountsFiled,
+      ccjs: buyer.ccjs,
+      netAssets: buyer.netAssets,
+    },
+  };
+}
+
 function summariseToolResult(name: string, result: unknown): string {
   try {
     // The Cursor SDK wraps MCP results in two envelopes:
@@ -107,14 +139,8 @@ export async function POST(req: NextRequest) {
 
   // Pre-fetch snapshots so the case is always complete and the UI panels render
   // up front. The agent will independently re-fetch via tools — that's the demo.
-  const ledger = ledgerSummary(buyer);
-  const specter = await fetchSpecter(buyer.domain, buyer.name);
-  const chSnapshot = {
-    filingsOnTime: buyer.filingsOnTime,
-    lastAccountsFiled: buyer.lastAccountsFiled,
-    ccjs: buyer.ccjs,
-    netAssets: buyer.netAssets,
-  };
+  // loadPanels routes "buy-real-1" through the live Xero / real-data layer.
+  const { ledger, recentLedger, specter, chSnapshot } = await loadPanels(buyer);
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -131,7 +157,7 @@ export async function POST(req: NextRequest) {
           industry: buyer.industry,
         },
         ledger,
-        recentLedger: buyer.ledger.slice(-8),
+        recentLedger,
         companiesHouse: chSnapshot,
         specter,
         invoice,
@@ -163,9 +189,14 @@ export async function POST(req: NextRequest) {
               cwd: projectRoot,
               env: {
                 PATH: process.env.PATH ?? "",
+                HOME: process.env.HOME ?? "",
                 NODE_ENV: process.env.NODE_ENV ?? "development",
                 SPECTER_API_KEY: process.env.SPECTER_API_KEY ?? "",
                 SPECTER_BASE_URL: process.env.SPECTER_BASE_URL ?? "",
+                // Required for buy-real-1: the MCP subprocess spawns its own
+                // Xero MCP child to fetch real ledger data, which needs these.
+                XERO_CLIENT_ID: process.env.XERO_CLIENT_ID ?? "",
+                XERO_CLIENT_SECRET: process.env.XERO_CLIENT_SECRET ?? "",
               },
             },
           },
@@ -253,7 +284,7 @@ Use the three MCP tools (getLedgerHistory, getCompaniesHouse, getSpecterSignals)
             reasoning: fullText.replace(/<<<DECISION[\s\S]*?DECISION>>>/, "").trim(),
             decision,
             specterSnapshot: specter,
-            ledgerSnapshot: { summary: ledger, recent: buyer.ledger.slice(-8) },
+            ledgerSnapshot: { summary: ledger, recent: recentLedger },
             chSnapshot,
           };
           cases.add(newCase);
@@ -300,8 +331,7 @@ async function runAnthropicFallback(req: NextRequest) {
   const buyer = getBuyer(invoice.buyerId);
   if (!buyer) return new Response("Buyer not found", { status: 404 });
 
-  const ledger = ledgerSummary(buyer);
-  const specter = await fetchSpecter(buyer.domain, buyer.name);
+  const { ledger, recentLedger, specter, chSnapshot } = await loadPanels(buyer);
 
   const userMsg = buildUserMessage({
     invoice: {
@@ -313,18 +343,13 @@ async function runAnthropicFallback(req: NextRequest) {
     },
     buyer: { name: buyer.name, ch: buyer.companiesHouseNumber, industry: buyer.industry },
     ledger,
-    ledgerLines: buyer.ledger.slice(-8).map((l) => ({
+    ledgerLines: recentLedger.map((l) => ({
       invoiceNumber: l.invoiceNumber,
       amount: l.amount,
       daysLate: l.daysLate,
       status: l.status,
     })),
-    companiesHouse: {
-      filingsOnTime: buyer.filingsOnTime,
-      lastAccountsFiled: buyer.lastAccountsFiled,
-      ccjs: buyer.ccjs,
-      netAssets: buyer.netAssets,
-    },
+    companiesHouse: chSnapshot,
     specter,
   });
 
@@ -343,13 +368,8 @@ async function runAnthropicFallback(req: NextRequest) {
           industry: buyer.industry,
         },
         ledger,
-        recentLedger: buyer.ledger.slice(-8),
-        companiesHouse: {
-          filingsOnTime: buyer.filingsOnTime,
-          lastAccountsFiled: buyer.lastAccountsFiled,
-          ccjs: buyer.ccjs,
-          netAssets: buyer.netAssets,
-        },
+        recentLedger,
+        companiesHouse: chSnapshot,
         specter,
         invoice,
       });
@@ -393,13 +413,8 @@ async function runAnthropicFallback(req: NextRequest) {
         reasoning: fullText.replace(/<<<DECISION[\s\S]*?DECISION>>>/, "").trim(),
         decision,
         specterSnapshot: specter,
-        ledgerSnapshot: { summary: ledger, recent: buyer.ledger.slice(-8) },
-        chSnapshot: {
-          filingsOnTime: buyer.filingsOnTime,
-          lastAccountsFiled: buyer.lastAccountsFiled,
-          ccjs: buyer.ccjs,
-          netAssets: buyer.netAssets,
-        },
+        ledgerSnapshot: { summary: ledger, recent: recentLedger },
+        chSnapshot,
       };
       cases.add(newCase);
 
@@ -440,8 +455,7 @@ async function runAnthropicFallbackInto(
     return;
   }
 
-  const ledger = ledgerSummary(buyer);
-  const specter = await fetchSpecter(buyer.domain, buyer.name);
+  const { ledger, recentLedger, specter, chSnapshot } = await loadPanels(buyer);
 
   const userMsg = buildUserMessage({
     invoice: {
@@ -453,18 +467,13 @@ async function runAnthropicFallbackInto(
     },
     buyer: { name: buyer.name, ch: buyer.companiesHouseNumber, industry: buyer.industry },
     ledger,
-    ledgerLines: buyer.ledger.slice(-8).map((l) => ({
+    ledgerLines: recentLedger.map((l) => ({
       invoiceNumber: l.invoiceNumber,
       amount: l.amount,
       daysLate: l.daysLate,
       status: l.status,
     })),
-    companiesHouse: {
-      filingsOnTime: buyer.filingsOnTime,
-      lastAccountsFiled: buyer.lastAccountsFiled,
-      ccjs: buyer.ccjs,
-      netAssets: buyer.netAssets,
-    },
+    companiesHouse: chSnapshot,
     specter,
   });
 
@@ -500,13 +509,8 @@ async function runAnthropicFallbackInto(
     reasoning: fullText.replace(/<<<DECISION[\s\S]*?DECISION>>>/, "").trim(),
     decision,
     specterSnapshot: specter,
-    ledgerSnapshot: { summary: ledger, recent: buyer.ledger.slice(-8) },
-    chSnapshot: {
-      filingsOnTime: buyer.filingsOnTime,
-      lastAccountsFiled: buyer.lastAccountsFiled,
-      ccjs: buyer.ccjs,
-      netAssets: buyer.netAssets,
-    },
+    ledgerSnapshot: { summary: ledger, recent: recentLedger },
+    chSnapshot,
   };
   cases.add(newCase);
 
