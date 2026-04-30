@@ -5,7 +5,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { Agent } from "@cursor/sdk";
 import { NextRequest } from "next/server";
 import { SUPPLIER, getInvoice, getBuyer, ledgerSummary, type LedgerLine } from "@/lib/mock-data";
-import { SYSTEM_PROMPT, buildUserMessage, parseDecision } from "@/lib/underwrite-prompt";
+import { SYSTEM_PROMPT, buildUserMessage, parseDecision, parseEvaluation } from "@/lib/underwrite-prompt";
 import { fetchSpecter, type SpecterResponse } from "@/lib/specter";
 import { realDataOrFallback } from "@/lib/real-data";
 import { cases, type Case } from "@/lib/store";
@@ -39,7 +39,19 @@ When the ledger says "fine" but Specter shows a hiring freeze, executive departu
 Trend matters more than average. A buyer slipping from 5d late → 38d late over 12 months is more concerning than steady 20d late.
 Reference specific numbers in your reasoning. No vague language.
 
-Format your output with these exact markdown headers in this order, then the decision block. Each section must be tight (2-4 sentences) — humans read this in seconds.
+EVALUATION CHECKLIST — score every invoice against these 9 named criteria using the exact thresholds. The verdict must be consistent with the checklist: 7+ PASS lean APPROVE, 4+ FAIL lean DECLINE, mixed (multiple CONCERN or ledger-vs-forward disagreement) ESCALATE.
+
+  01 payment_history (months trading): PASS >= 6, CONCERN 3-5, FAIL < 3
+  02 payment_behaviour (avg days late on paid invoices): PASS < 15, CONCERN 15-30, FAIL > 30
+  03 payment_trend (last4 avg minus prev4 avg, days): PASS <= 0, CONCERN 1-10, FAIL > 10
+  04 ccj_check (county court judgments): PASS 0, FAIL any
+  05 financial_standing (net assets): PASS > £1m, CONCERN £0-£1m, FAIL negative
+  06 filing_punctuality (CH filings on time): PASS yes, FAIL no
+  07 forward_health (Specter health 0-100): PASS >= 70, CONCERN 40-69, FAIL < 40
+  08 headcount_momentum (Specter 90-day headcount %): PASS >= 0, CONCERN -1 to -10, FAIL < -10
+  09 adverse_news (Specter notable_events_90d count): PASS 0, CONCERN 1-2, FAIL 3+
+
+Format your output with these exact markdown headers, then the EVALUATION block, then the DECISION block. Each section is tight (2-4 sentences) — humans read this in seconds.
 
 ## Ledger
 <analysis of ledger history, with specific numbers>
@@ -52,6 +64,18 @@ Format your output with these exact markdown headers in this order, then the dec
 
 ## Synthesis
 <1-3 sentences synthesising the three sources, especially any conflict>
+
+<<<EVALUATION
+01_payment_history: PASS|CONCERN|FAIL | <one-line evidence, max ~10 words>
+02_payment_behaviour: PASS|CONCERN|FAIL | <one-line evidence, max ~10 words>
+03_payment_trend: PASS|CONCERN|FAIL | <one-line evidence, max ~10 words>
+04_ccj_check: PASS|FAIL | <one-line evidence, max ~10 words>
+05_financial_standing: PASS|CONCERN|FAIL | <one-line evidence, max ~10 words>
+06_filing_punctuality: PASS|FAIL | <one-line evidence, max ~10 words>
+07_forward_health: PASS|CONCERN|FAIL | <one-line evidence, max ~10 words>
+08_headcount_momentum: PASS|CONCERN|FAIL | <one-line evidence, max ~10 words>
+09_adverse_news: PASS|CONCERN|FAIL | <one-line evidence, max ~10 words>
+EVALUATION>>>
 
 <<<DECISION
 verdict: APPROVE | DECLINE | ESCALATE
@@ -273,6 +297,7 @@ Use the three MCP tools (getLedgerHistory, getCompaniesHouse, getSpecterSignals)
           console.error("[underwrite] SDK output had no <<<DECISION>>> block — falling back to Anthropic");
           sdkSucceeded = false;
         } else {
+          const evaluation = parseEvaluation(fullText);
           const newCase: Case = {
             id: `case-${Date.now()}`,
             invoiceId: invoice.id,
@@ -281,13 +306,15 @@ Use the three MCP tools (getLedgerHistory, getCompaniesHouse, getSpecterSignals)
             buyerName: buyer.name,
             buyerId: buyer.id,
             createdAt: new Date().toISOString(),
-            reasoning: fullText.replace(/<<<DECISION[\s\S]*?DECISION>>>/, "").trim(),
+            reasoning: fullText.replace(/<<<EVALUATION[\s\S]*?EVALUATION>>>/, "").replace(/<<<DECISION[\s\S]*?DECISION>>>/, "").trim(),
             decision,
+            evaluation,
             specterSnapshot: specter,
             ledgerSnapshot: { summary: ledger, recent: recentLedger },
             chSnapshot,
           };
           cases.add(newCase);
+          send("evaluation", evaluation);
           send("decision", { case: newCase });
           send("done", {});
           controller.close();
@@ -402,6 +429,7 @@ async function runAnthropicFallback(req: NextRequest) {
         return;
       }
 
+      const evaluation = parseEvaluation(fullText);
       const newCase: Case = {
         id: `case-${Date.now()}`,
         invoiceId: invoice.id,
@@ -410,14 +438,16 @@ async function runAnthropicFallback(req: NextRequest) {
         buyerName: buyer.name,
         buyerId: buyer.id,
         createdAt: new Date().toISOString(),
-        reasoning: fullText.replace(/<<<DECISION[\s\S]*?DECISION>>>/, "").trim(),
+        reasoning: fullText.replace(/<<<EVALUATION[\s\S]*?EVALUATION>>>/, "").replace(/<<<DECISION[\s\S]*?DECISION>>>/, "").trim(),
         decision,
+        evaluation,
         specterSnapshot: specter,
         ledgerSnapshot: { summary: ledger, recent: recentLedger },
         chSnapshot,
       };
       cases.add(newCase);
 
+      send("evaluation", evaluation);
       send("decision", { case: newCase });
       send("done", {});
       controller.close();
@@ -498,6 +528,7 @@ async function runAnthropicFallbackInto(
     return;
   }
 
+  const evaluation = parseEvaluation(fullText);
   const newCase: Case = {
     id: `case-${Date.now()}`,
     invoiceId: invoice.id,
@@ -506,14 +537,16 @@ async function runAnthropicFallbackInto(
     buyerName: buyer.name,
     buyerId: buyer.id,
     createdAt: new Date().toISOString(),
-    reasoning: fullText.replace(/<<<DECISION[\s\S]*?DECISION>>>/, "").trim(),
+    reasoning: fullText.replace(/<<<EVALUATION[\s\S]*?EVALUATION>>>/, "").replace(/<<<DECISION[\s\S]*?DECISION>>>/, "").trim(),
     decision,
+    evaluation,
     specterSnapshot: specter,
     ledgerSnapshot: { summary: ledger, recent: recentLedger },
     chSnapshot,
   };
   cases.add(newCase);
 
+  send("evaluation", evaluation);
   send("decision", { case: newCase });
   send("done", {});
   controller.close();

@@ -9,6 +9,9 @@ const nextConfig = {
       "@modelcontextprotocol/sdk",
     ],
   },
+  async redirects() {
+    return [{ source: "/supplier", destination: "/analyst", permanent: false }];
+  },
 };
 
 module.exports = nextConfig;

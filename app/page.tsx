@@ -107,20 +107,13 @@ export default function Home() {
           Making B2B payments instant with agentic underwriting.
         </p>
 
-        <div className="mt-16 grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-[760px]">
-          <Link
-            href="/supplier"
-            className="group block rule-t pt-5 pb-6 px-5 hover:bg-soft transition rise rise-2 text-left"
-          >
-            <div className="eyebrow mb-3">Supplier console</div>
-            <span className="font-serif text-2xl">Request an advance →</span>
-          </Link>
+        <div className="mt-16 w-full max-w-[520px] mx-auto">
           <Link
             href="/analyst"
-            className="group block rule-t pt-5 pb-6 px-5 hover:bg-soft transition rise rise-3 text-left"
+            className="group block rule-t pt-5 pb-6 px-5 hover:bg-soft transition rise rise-2 text-left"
           >
-            <div className="eyebrow mb-3">Analyst desk</div>
-            <span className="font-serif text-2xl">Review escalations →</span>
+            <div className="eyebrow mb-3">Analyst console</div>
+            <span className="font-serif text-2xl">Underwrite inbound invoices →</span>
           </Link>
         </div>
       </section>

@@ -1,99 +1,239 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState, useRef, useEffect } from "react";
+import Link from "next/link";
+import { SUPPLIER, getBuyer } from "@/lib/mock-data";
+import type { Decision, Evaluation } from "@/lib/underwrite-prompt";
 import { Topbar, Footer } from "@/components/Chrome";
-import type { Case } from "@/lib/store";
+import { EvaluationChecklist } from "@/components/EvaluationChecklist";
 
-export default function AnalystPage() {
-  const [allCases, setAllCases] = useState<Case[]>([]);
+type FetchStatus = "idle" | "fetching" | "fetched";
+type SourceKey = "ledger" | "companiesHouse" | "specter";
+
+type StreamState = {
+  running: boolean;
+  reasoning: string;
+  context: any | null;
+  evaluation: Evaluation | null;
+  decision: { case: any } | null;
+  error: string | null;
+  fetchStatus: Record<SourceKey, FetchStatus>;
+};
+
+const initialState: StreamState = {
+  running: false,
+  reasoning: "",
+  context: null,
+  evaluation: null,
+  decision: null,
+  error: null,
+  fetchStatus: { ledger: "idle", companiesHouse: "idle", specter: "idle" },
+};
+
+const TOOL_TO_SOURCE: Record<string, SourceKey> = {
+  getLedgerHistory: "ledger",
+  getCompaniesHouse: "companiesHouse",
+  getSpecterSignals: "specter",
+};
+
+export default function SupplierPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [notes, setNotes] = useState("");
-  const [overrideLoading, setOverrideLoading] = useState(false);
+  const [state, setState] = useState<StreamState>(initialState);
+  const reasoningRef = useRef<HTMLDivElement>(null);
 
-  async function load() {
-    const r = await fetch("/api/cases", { cache: "no-store" });
-    const j = await r.json();
-    setAllCases(j.cases);
-    if (!selectedId && j.cases.length) setSelectedId(j.cases[0].id);
-  }
-
+  // autoscroll reasoning panel
   useEffect(() => {
-    load();
-    const t = setInterval(load, 2500);
-    return () => clearInterval(t);
-  }, []);
+    if (reasoningRef.current) {
+      reasoningRef.current.scrollTop = reasoningRef.current.scrollHeight;
+    }
+  }, [state.reasoning]);
 
-  const escalations = allCases.filter((c) => c.decision.verdict === "ESCALATE" && !c.humanVerdict);
-  const decided = allCases.filter((c) => c.humanVerdict || c.decision.verdict !== "ESCALATE");
-  const selected = allCases.find((c) => c.id === selectedId);
+  async function runUnderwriting(invoiceId: string) {
+    setSelectedId(invoiceId);
+    setState({ ...initialState, running: true });
 
-  async function override(verdict: "APPROVE" | "DECLINE") {
-    if (!selected) return;
-    setOverrideLoading(true);
-    await fetch("/api/cases", {
+    const res = await fetch("/api/underwrite", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: selected.id, verdict, notes }),
+      body: JSON.stringify({ invoiceId }),
     });
-    setNotes("");
-    await load();
-    setOverrideLoading(false);
+
+    if (!res.body) {
+      setState((s) => ({ ...s, running: false, error: "No stream" }));
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split("\n\n");
+      buffer = events.pop() ?? "";
+
+      for (const ev of events) {
+        const lines = ev.split("\n");
+        const eventLine = lines.find((l) => l.startsWith("event:"));
+        const dataLine = lines.find((l) => l.startsWith("data:"));
+        if (!eventLine || !dataLine) continue;
+        const eventName = eventLine.slice(6).trim();
+        const data = JSON.parse(dataLine.slice(5).trim());
+
+        if (eventName === "context") {
+          setState((s) => ({ ...s, context: data }));
+        } else if (eventName === "delta") {
+          setState((s) => ({ ...s, reasoning: s.reasoning + data.text }));
+        } else if (eventName === "tool_call") {
+          const src = TOOL_TO_SOURCE[data.tool];
+          if (src) {
+            setState((s) => ({ ...s, fetchStatus: { ...s.fetchStatus, [src]: "fetching" } }));
+          }
+        } else if (eventName === "tool_result") {
+          const src = TOOL_TO_SOURCE[data.tool];
+          if (src) {
+            setState((s) => ({ ...s, fetchStatus: { ...s.fetchStatus, [src]: "fetched" } }));
+          }
+        } else if (eventName === "evaluation") {
+          setState((s) => ({ ...s, evaluation: data as Evaluation }));
+        } else if (eventName === "decision") {
+          setState((s) => ({ ...s, decision: data }));
+        } else if (eventName === "error") {
+          setState((s) => ({ ...s, error: data.message, running: false }));
+        } else if (eventName === "done") {
+          // On stream end, mark any sources still idle as fetched so stats reveal
+          // (covers the Anthropic fallback path where no tool events fire).
+          setState((s) => ({
+            ...s,
+            running: false,
+            fetchStatus: {
+              ledger: s.fetchStatus.ledger === "idle" ? "fetched" : s.fetchStatus.ledger,
+              companiesHouse: s.fetchStatus.companiesHouse === "idle" ? "fetched" : s.fetchStatus.companiesHouse,
+              specter: s.fetchStatus.specter === "idle" ? "fetched" : s.fetchStatus.specter,
+            },
+          }));
+        }
+      }
+    }
   }
+
+  const selectedInvoice = selectedId
+    ? SUPPLIER.outstanding.find((i) => i.id === selectedId)
+    : null;
+  const selectedBuyer = selectedInvoice ? getBuyer(selectedInvoice.buyerId) : null;
+
+  // Strip the EVALUATION + DECISION blocks from the streaming reasoning so the
+  // panel shows clean prose only. EVALUATION precedes DECISION in the agent's
+  // output, so cutting from <<<EVALUATION onwards removes both.
+  const displayedReasoning = state.reasoning.replace(/<<<EVALUATION[\s\S]*$/, "").trim();
 
   return (
     <main className="min-h-screen flex flex-col">
-      <Topbar active="analyst" />
+      <Topbar />
 
       <div className="flex-1 max-w-[1400px] mx-auto w-full px-8 py-10 grid grid-cols-12 gap-8">
-        {/* Queue */}
+        {/* LEFT — invoice list */}
         <aside className="col-span-12 lg:col-span-4 rise rise-1">
           <div className="hair-b pb-3 mb-5 flex items-baseline justify-between">
-            <p className="eyebrow">Escalation queue</p>
-            <p className="font-mono text-xs" style={{ color: "var(--escalate)" }}>
-              {escalations.length} OPEN
-            </p>
+            <p className="eyebrow">Inbound invoices</p>
+            <p className="font-mono text-xs text-muted">{SUPPLIER.outstanding.length} to review</p>
           </div>
 
-          {escalations.length === 0 && (
-            <div className="hair-t hair-b py-10 text-center">
-              <p className="font-serif text-xl text-muted">No open cases</p>
-              <p className="font-mono text-xs text-muted mt-2">
-                Run an underwriting from the supplier console to populate.
-              </p>
-            </div>
-          )}
-
-          <div className="space-y-1 mb-8">
-            {escalations.map((c) => (
-              <CaseCard key={c.id} c={c} active={c.id === selectedId} onClick={() => setSelectedId(c.id)} />
-            ))}
+          <div className="space-y-1">
+            {SUPPLIER.outstanding.map((inv) => {
+              const buyer = getBuyer(inv.buyerId)!;
+              const isSelected = selectedId === inv.id;
+              return (
+                <button
+                  key={inv.id}
+                  onClick={() => runUnderwriting(inv.id)}
+                  disabled={state.running}
+                  className={`w-full text-left p-4 border ${
+                    isSelected ? "border-ink bg-soft" : "border-faint hover:border-ink"
+                  } transition disabled:opacity-50`}
+                >
+                  <div className="flex justify-between items-baseline mb-2">
+                    <span className="font-mono text-xs">{inv.invoiceNumber}</span>
+                    <span className="font-mono text-xs text-muted">Due {inv.due.slice(5)}</span>
+                  </div>
+                  <div className="font-serif text-lg leading-snug">{buyer.name}</div>
+                  <div className="text-sm text-[color:var(--ink)]/70 mb-3">{inv.description}</div>
+                  <div className="flex justify-between items-baseline">
+                    <span className="font-mono text-base">£{inv.amount.toLocaleString()}</span>
+                    <span className="font-mono text-xs text-signal">
+                      {state.running && isSelected ? "ANALYSING…" : "REVIEW →"}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
           </div>
 
-          {decided.length > 0 && (
-            <>
-              <div className="hair-b pb-3 mb-3 mt-10">
-                <p className="eyebrow">Decided · log</p>
-              </div>
-              <div className="space-y-1">
-                {decided.map((c) => (
-                  <CaseCard key={c.id} c={c} active={c.id === selectedId} onClick={() => setSelectedId(c.id)} compact />
-                ))}
-              </div>
-            </>
-          )}
         </aside>
 
-        {/* Detail */}
+        {/* RIGHT — workspace */}
         <section className="col-span-12 lg:col-span-8 rise rise-2">
-          {!selected ? (
-            <div className="hair-t hair-b py-16 text-center">
-              <p className="eyebrow mb-4">No case selected</p>
-              <p className="font-serif text-2xl text-[color:var(--ink)]/60 max-w-md mx-auto leading-snug">
-                Open a case from the queue, or run a fresh underwriting from the supplier console.
-              </p>
+          {!selectedInvoice && (
+            <EmptyState />
+          )}
+
+          {selectedInvoice && selectedBuyer && (
+            <div className="space-y-6">
+              {/* Header strip */}
+              <div className="rule-b pb-5 flex items-end justify-between gap-4">
+                <div>
+                  <p className="eyebrow mb-2">Underwriting</p>
+                  <h1 className="font-serif text-4xl leading-tight">{selectedBuyer.name}</h1>
+                  <p className="text-[color:var(--ink)]/70 mt-1">
+                    Invoice number: {selectedInvoice.invoiceNumber}
+                  </p>
+                </div>
+                {state.running && (
+                  <p className="font-mono text-xs text-signal cursor-blink">STREAMING</p>
+                )}
+              </div>
+
+              {/* Evaluation checklist — primary surface for the demo */}
+              <EvaluationChecklist
+                evaluation={state.evaluation}
+                context={state.context}
+              />
+
+              {/* Agent reasoning panel — supporting prose below the checklist */}
+              <div>
+                <div className="flex items-baseline justify-between mb-3">
+                  <p className="eyebrow">Agent reasoning</p>
+                  {state.running && (
+                    <p className="font-mono text-xs text-signal cursor-blink">STREAMING</p>
+                  )}
+                </div>
+                <div
+                  ref={reasoningRef}
+                  className="border border-faint p-6 min-h-[160px] max-h-[360px] overflow-y-auto bg-white/40"
+                >
+                  {displayedReasoning ? (
+                    <div className="font-serif text-[16px] leading-[1.65] whitespace-pre-wrap">
+                      {displayedReasoning}
+                    </div>
+                  ) : (
+                    <div className="text-muted font-mono text-sm">
+                      {state.running ? "Connecting to data sources…" : "Awaiting analysis."}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Decision card */}
+              {state.decision && <DecisionCard caseData={state.decision.case} />}
+
+              {state.error && (
+                <div className="border border-decline p-4 text-decline font-mono text-sm">
+                  ERROR: {state.error}
+                </div>
+              )}
             </div>
-          ) : (
-            <CaseDetail c={selected} notes={notes} setNotes={setNotes} override={override} loading={overrideLoading} />
           )}
         </section>
       </div>
@@ -103,185 +243,316 @@ export default function AnalystPage() {
   );
 }
 
-function CaseCard({ c, active, onClick, compact }: { c: Case; active: boolean; onClick: () => void; compact?: boolean }) {
-  const verdict = c.humanVerdict ?? c.decision.verdict;
-  const colour =
-    verdict === "APPROVE" ? "var(--approve)" : verdict === "DECLINE" ? "var(--decline)" : "var(--escalate)";
+function EmptyState() {
   return (
-    <button
-      onClick={onClick}
-      className={`w-full text-left p-3 border ${active ? "border-ink bg-soft" : "border-faint hover:border-ink"} transition`}
-    >
-      <div className="flex justify-between items-baseline mb-1">
-        <span className="font-mono text-xs">{c.invoiceNumber}</span>
-        <span className="pill" style={{ color: colour }}>
-          {verdict}
-        </span>
-      </div>
-      <div className={`font-serif ${compact ? "text-base" : "text-lg"} leading-snug`}>{c.buyerName}</div>
-      {!compact && (
-        <div className="flex justify-between items-baseline mt-2">
-          <span className="font-mono text-xs text-muted">£{c.amount.toLocaleString()}</span>
-          <span className="font-mono text-xs text-muted">conf {c.decision.confidence}%</span>
-        </div>
-      )}
-    </button>
+    <div className="hair-t hair-b py-16 text-center">
+      <p className="eyebrow mb-4">Awaiting selection</p>
+      <p className="font-serif text-2xl text-[color:var(--ink)]/60 max-w-md mx-auto leading-snug">
+        Pick an invoice on the left to underwrite it.
+      </p>
+    </div>
   );
 }
 
-function CaseDetail({
-  c,
-  notes,
-  setNotes,
-  override,
-  loading,
+type Status = "pass" | "warn" | "fail";
+
+const STATUS_PALETTE: Record<Status, { color: string; label: string }> = {
+  pass: { color: "var(--approve)", label: "CLEAN" },
+  warn: { color: "var(--signal)", label: "CONCERN" },
+  fail: { color: "var(--decline)", label: "FAIL" },
+};
+
+function SourceCard({
+  title,
+  fetchLabel,
+  fetchStatus,
+  statLine,
+  status,
+  whyLine,
+  reasoning,
+  running,
 }: {
-  c: Case;
-  notes: string;
-  setNotes: (s: string) => void;
-  override: (v: "APPROVE" | "DECLINE") => void;
-  loading: boolean;
+  title: string;
+  fetchLabel: string;
+  fetchStatus: FetchStatus;
+  statLine: string;
+  status: Status;
+  whyLine: string | null;
+  reasoning: string;
+  running: boolean;
 }) {
-  const isDecided = !!c.humanVerdict;
-  const sp = c.specterSnapshot;
-  const ls = c.ledgerSnapshot.summary;
+  // Until the agent has fetched THIS source, hide the verdict colour and stats
+  // so the analysis feels live. Once fetched (or once the run is complete), the
+  // card transitions to its full coloured state.
+  const dataRevealed = fetchStatus === "fetched" || !running;
+  const palette = dataRevealed ? STATUS_PALETTE[status] : STATUS_PALETTE.pass;
+  const borderColour = dataRevealed ? palette.color : "var(--faint)";
 
   return (
-    <div className="space-y-8">
-      <div className="rule-b pb-5">
-        <p className="eyebrow mb-2">{c.id} · {new Date(c.createdAt).toLocaleString("en-GB")}</p>
-        <h1 className="font-serif text-4xl leading-tight">{c.buyerName}</h1>
-        <p className="text-[color:var(--ink)]/70 mt-1">
-          {c.invoiceNumber} · £{c.amount.toLocaleString()}
-        </p>
+    <div
+      className="border-2 p-7 bg-white/40 rise transition-[border-color] duration-300"
+      style={{ borderColor: borderColour }}
+    >
+      <div className="flex items-start justify-between gap-4 mb-3">
+        <div className="flex-1 min-w-0">
+          <h2
+            className="font-serif text-5xl tracking-tight leading-none transition-colors duration-300"
+            style={{ color: dataRevealed ? palette.color : "var(--ink)" }}
+          >
+            {title}
+          </h2>
+          {dataRevealed && whyLine && (
+            <p
+              className="font-mono text-sm mt-3 uppercase tracking-wide"
+              style={{ color: palette.color }}
+            >
+              {whyLine}
+            </p>
+          )}
+        </div>
+        <FetchBadge
+          status={fetchStatus}
+          fetchLabel={fetchLabel}
+          verdictColour={palette.color}
+          verdictLabel={palette.label}
+          dataRevealed={dataRevealed}
+        />
       </div>
 
-      {/* Why escalated */}
-      <div className="border-l-4 pl-6 py-2" style={{ borderColor: "var(--escalate)" }}>
-        <p className="eyebrow mb-2" style={{ color: "var(--escalate)" }}>
-          Agent verdict · {c.decision.verdict} · confidence {c.decision.confidence}%
-        </p>
-        {c.decision.escalation_reason && (
-          <p className="font-serif text-xl leading-snug">{c.decision.escalation_reason}</p>
+      <p className="font-mono text-sm text-[color:var(--ink)]/75 mb-5 min-h-[20px]">
+        {dataRevealed ? statLine : <span className="text-muted">— awaiting data —</span>}
+      </p>
+
+      <div className="font-serif text-[17px] leading-[1.6] whitespace-pre-wrap min-h-[64px]">
+        {reasoning ? (
+          reasoning
+        ) : (
+          <span className="text-muted italic font-sans text-sm">
+            {running ? "Awaiting analysis…" : "—"}
+          </span>
         )}
-        {c.decision.key_factors.length > 0 && (
-          <ul className="mt-4 space-y-1 text-sm">
-            {c.decision.key_factors.map((f, i) => (
+      </div>
+    </div>
+  );
+}
+
+function FetchBadge({
+  status,
+  fetchLabel,
+  verdictColour,
+  verdictLabel,
+  dataRevealed,
+}: {
+  status: FetchStatus;
+  fetchLabel: string;
+  verdictColour: string;
+  verdictLabel: string;
+  dataRevealed: boolean;
+}) {
+  if (dataRevealed) {
+    return (
+      <span
+        className="pill shrink-0"
+        style={{ color: verdictColour, borderColor: verdictColour }}
+      >
+        {verdictLabel}
+      </span>
+    );
+  }
+  if (status === "fetching") {
+    return (
+      <span
+        className="pill shrink-0 inline-flex items-center gap-2"
+        style={{ color: "var(--signal)", borderColor: "var(--signal)" }}
+      >
+        <span className="fetch-dot" />
+        {fetchLabel}…
+      </span>
+    );
+  }
+  return (
+    <span
+      className="pill shrink-0 inline-flex items-center gap-2"
+      style={{ color: "var(--muted)", borderColor: "var(--faint)" }}
+    >
+      <span className="fetch-dot fetch-dot-idle" />
+      Awaiting query
+    </span>
+  );
+}
+
+// Split the agent's streaming reasoning into per-source sections by `## ` markdown
+// headers. Tolerates partial last section (still streaming) and varied phrasing
+// like "## Ledger History Analysis" — matches on substring.
+function splitReasoningBySource(text: string): {
+  ledger: string;
+  companiesHouse: string;
+  specter: string;
+} {
+  const sections = { ledger: "", companiesHouse: "", specter: "" };
+  if (!text) return sections;
+  const re = /^##\s+(.+?)$([\s\S]*?)(?=^##\s|$)/gim;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const header = m[1].toLowerCase();
+    const body = m[2].trim();
+    if (/ledger/.test(header)) {
+      sections.ledger = sections.ledger ? `${sections.ledger}\n\n${body}` : body;
+    } else if (/companies\s*house/.test(header)) {
+      sections.companiesHouse = sections.companiesHouse
+        ? `${sections.companiesHouse}\n\n${body}`
+        : body;
+    } else if (/specter/.test(header)) {
+      sections.specter = sections.specter ? `${sections.specter}\n\n${body}` : body;
+    }
+  }
+  return sections;
+}
+
+// ---- Status helpers (deterministic, derived from the data context) ----
+
+function ledgerStatus(l: any): Status {
+  if (l.overdueCount >= 2 || l.trendDelta >= 25) return "fail";
+  if (l.overdueCount >= 1 || l.trendDelta >= 8) return "warn";
+  return "pass";
+}
+
+function chStatus(ch: any): Status {
+  if (ch.ccjs > 0 || ch.netAssets < 0 || !ch.filingsOnTime) return "fail";
+  return "pass";
+}
+
+function specterStatus(s: any): Status {
+  if (s.health_score < 40 || s.headcount_growth_90d_pct <= -20) return "fail";
+  if (s.health_score < 65 || s.headcount_growth_90d_pct < -5 || s.web_traffic_growth_90d_pct < -15)
+    return "warn";
+  return "pass";
+}
+
+function fmtSigned(n: number, suffix = "") {
+  return `${n > 0 ? "+" : ""}${n.toFixed(1)}${suffix}`;
+}
+
+function ledgerStatLine(l: any) {
+  return `${l.paidCount}/${l.totalInvoices} paid · ${l.overdueCount} overdue · trend ${fmtSigned(l.trendDelta, "d")} · revenue £${(l.totalRevenue / 1000).toFixed(0)}k`;
+}
+
+function chStatLine(ch: any) {
+  return `Filings ${ch.filingsOnTime ? "on time" : "LATE"} · ${ch.ccjs} CCJ${ch.ccjs === 1 ? "" : "s"} · £${(ch.netAssets / 1_000_000).toFixed(2)}m net assets · last accounts ${ch.lastAccountsFiled}`;
+}
+
+function specterStatLine(sp: any) {
+  const s = sp.signals;
+  return `Health ${s.health_score}/100 · headcount ${fmtSigned(s.headcount_growth_90d_pct, "%")} · traffic ${fmtSigned(s.web_traffic_growth_90d_pct, "%")} · sentiment ${s.news_sentiment_30d.toFixed(2)} · ${sp.source}`;
+}
+
+function ledgerWhy(l: any, status: Status) {
+  if (status === "pass") return null;
+  const bits: string[] = [];
+  if (l.overdueCount >= 1) bits.push(`${l.overdueCount} invoice${l.overdueCount === 1 ? "" : "s"} overdue`);
+  if (l.trendDelta >= 8) bits.push(`payment lag accelerating ${fmtSigned(l.trendDelta, "d")}`);
+  return bits.length ? bits.join(" · ") : null;
+}
+
+function chWhy(ch: any, status: Status) {
+  if (status === "pass") return null;
+  const bits: string[] = [];
+  if (ch.ccjs > 0) bits.push(`${ch.ccjs} CCJ${ch.ccjs === 1 ? "" : "s"}`);
+  if (ch.netAssets < 0) bits.push("negative net assets");
+  if (!ch.filingsOnTime) bits.push("filings overdue");
+  return bits.length ? bits.join(" · ") : null;
+}
+
+function specterWhy(s: any, status: Status) {
+  if (status === "pass") return null;
+  const bits: string[] = [];
+  if (s.health_score < 40) bits.push(`health critical ${s.health_score}/100`);
+  else if (s.health_score < 65) bits.push(`health weakening ${s.health_score}/100`);
+  if (s.headcount_growth_90d_pct < -5) bits.push(`headcount ${fmtSigned(s.headcount_growth_90d_pct, "%")}`);
+  if (s.web_traffic_growth_90d_pct < -15) bits.push(`traffic ${fmtSigned(s.web_traffic_growth_90d_pct, "%")}`);
+  return bits.length ? bits.join(" · ") : null;
+}
+
+function DecisionCard({ caseData }: { caseData: any }) {
+  const d: Decision = caseData.decision;
+  const verdictColour =
+    d.verdict === "APPROVE"
+      ? "var(--approve)"
+      : d.verdict === "DECLINE"
+      ? "var(--decline)"
+      : "var(--escalate)";
+
+  return (
+    <div className="border-2 p-7 rise rise-3" style={{ borderColor: verdictColour }}>
+      <div className="flex items-baseline justify-between mb-6">
+        <p className="eyebrow" style={{ color: verdictColour }}>
+          Decision · {new Date(caseData.createdAt).toLocaleTimeString("en-GB")}
+        </p>
+        <span className="font-mono text-xs text-muted">{caseData.id}</span>
+      </div>
+
+      <div className="grid grid-cols-12 gap-6 items-start">
+        <div className="col-span-12 md:col-span-5">
+          <h2 className="font-serif text-5xl tracking-tight" style={{ color: verdictColour }}>
+            {d.verdict}
+          </h2>
+          <div className="mt-5">
+            <div className="flex justify-between items-baseline mb-2">
+              <span className="eyebrow">Confidence</span>
+              <span className="font-mono text-sm">{d.confidence}%</span>
+            </div>
+            <div className="confidence-bar">
+              <span style={{ width: `${d.confidence}%`, background: verdictColour }} />
+            </div>
+          </div>
+        </div>
+
+        <div className="col-span-12 md:col-span-7">
+          {d.verdict !== "ESCALATE" ? (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="eyebrow mb-1">Advance</p>
+                <p className="font-serif text-3xl">{d.advance_pct}%</p>
+                <p className="font-mono text-sm text-muted">
+                  £{((caseData.amount * d.advance_pct) / 100).toLocaleString()}
+                </p>
+              </div>
+              <div>
+                <p className="eyebrow mb-1">Fee</p>
+                <p className="font-serif text-3xl">{d.fee_bps} bps</p>
+                <p className="font-mono text-sm text-muted">
+                  £{((caseData.amount * d.fee_bps) / 10000).toLocaleString()}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="border-l-2 pl-5 py-1" style={{ borderColor: verdictColour }}>
+              <p className="eyebrow mb-2" style={{ color: verdictColour }}>Why escalated</p>
+              <p className="font-serif text-lg leading-snug">{d.escalation_reason}</p>
+              <Link
+                href="/analyst"
+                className="inline-block mt-4 font-mono text-sm border border-ink px-3 py-2 hover:bg-ink hover:text-paper transition"
+              >
+                Open analyst desk →
+              </Link>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {d.key_factors.length > 0 && (
+        <div className="mt-6 pt-5 hair-t">
+          <p className="eyebrow mb-3">Key factors</p>
+          <ul className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1 text-sm">
+            {d.key_factors.map((f, i) => (
               <li key={i} className="flex gap-2">
                 <span className="font-mono text-muted">{String(i + 1).padStart(2, "0")}</span>
                 <span>{f}</span>
               </li>
             ))}
           </ul>
-        )}
-      </div>
-
-      {/* Three columns */}
-      <div className="grid grid-cols-3 gap-px bg-faint border border-faint">
-        <div className="bg-paper p-5">
-          <p className="eyebrow mb-3">01 · Ledger</p>
-          <KV k="Months" v={ls.relationshipMonths.toString()} />
-          <KV k="Avg late" v={`${ls.avgDaysLate}d`} />
-          <KV k="Last 4 avg" v={`${ls.lastAvg}d`} tone={ls.lastAvg > 20 ? "warn" : "neutral"} />
-          <KV k="Prev 4 avg" v={`${ls.prevAvg}d`} />
-          <KV k="Trend" v={`${ls.trendDelta > 0 ? "+" : ""}${ls.trendDelta}d`} tone={ls.trendDelta > 5 ? "warn" : "neutral"} />
-          <KV k="Revenue" v={`£${(ls.totalRevenue / 1000).toFixed(0)}k`} />
-        </div>
-        <div className="bg-paper p-5">
-          <p className="eyebrow mb-3">02 · Specter</p>
-          <KV k="Health" v={`${sp.signals.health_score}/100`} />
-          <KV k="Headcount Δ" v={`${sp.signals.headcount_growth_90d_pct.toFixed(1)}%`} tone={sp.signals.headcount_growth_90d_pct < -5 ? "warn" : "neutral"} />
-          <KV k="Web traffic Δ" v={`${sp.signals.web_traffic_growth_90d_pct.toFixed(1)}%`} tone={sp.signals.web_traffic_growth_90d_pct < -10 ? "warn" : "neutral"} />
-          <KV k="Sentiment" v={sp.signals.news_sentiment_30d.toFixed(2)} tone={sp.signals.news_sentiment_30d < -0.1 ? "warn" : "neutral"} />
-          {sp.signals.notable_events_90d?.length > 0 && (
-            <div className="mt-3 pt-3 hair-t">
-              <p className="eyebrow mb-2 text-[9px]">Events</p>
-              <ul className="text-xs space-y-1 text-[color:var(--ink)]/80">
-                {sp.signals.notable_events_90d.map((e: string, i: number) => (
-                  <li key={i} className="leading-snug">— {e}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-        <div className="bg-paper p-5">
-          <p className="eyebrow mb-3">03 · Companies House</p>
-          <KV k="On time" v={c.chSnapshot.filingsOnTime ? "Yes" : "No"} tone={c.chSnapshot.filingsOnTime ? "good" : "warn"} />
-          <KV k="Last filed" v={c.chSnapshot.lastAccountsFiled} />
-          <KV k="CCJs" v={c.chSnapshot.ccjs.toString()} tone={c.chSnapshot.ccjs > 0 ? "warn" : "neutral"} />
-          <KV k="Net assets" v={`£${(c.chSnapshot.netAssets / 1_000_000).toFixed(2)}m`} tone={c.chSnapshot.netAssets < 0 ? "warn" : "neutral"} />
-        </div>
-      </div>
-
-      {/* Reasoning */}
-      <div>
-        <p className="eyebrow mb-3">Agent reasoning · transcript</p>
-        <div className="border border-faint p-6 max-h-[320px] overflow-y-auto bg-white/40">
-          <div className="font-serif text-[16px] leading-[1.65] whitespace-pre-wrap">
-            {c.reasoning}
-          </div>
-        </div>
-      </div>
-
-      {/* Override */}
-      {!isDecided && c.decision.verdict === "ESCALATE" && (
-        <div className="rule-t pt-6">
-          <p className="eyebrow mb-3">Human decision</p>
-          <textarea
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            placeholder="Notes for the audit log…"
-            className="w-full p-4 border border-faint bg-white/60 font-mono text-sm focus:border-ink focus:outline-none mb-4"
-            rows={3}
-          />
-          <div className="flex gap-3">
-            <button
-              disabled={loading}
-              onClick={() => override("APPROVE")}
-              className="px-6 py-3 font-mono text-sm border-2 disabled:opacity-50 hover:bg-approve hover:text-paper transition"
-              style={{ borderColor: "var(--approve)", color: "var(--approve)" }}
-            >
-              APPROVE & ADVANCE
-            </button>
-            <button
-              disabled={loading}
-              onClick={() => override("DECLINE")}
-              className="px-6 py-3 font-mono text-sm border-2 disabled:opacity-50 hover:bg-decline hover:text-paper transition"
-              style={{ borderColor: "var(--decline)", color: "var(--decline)" }}
-            >
-              DECLINE
-            </button>
-          </div>
         </div>
       )}
-
-      {isDecided && (
-        <div className="rule-t pt-6">
-          <p className="eyebrow mb-2">Resolved</p>
-          <p className="font-serif text-xl">
-            Human override:{" "}
-            <span style={{ color: c.humanVerdict === "APPROVE" ? "var(--approve)" : "var(--decline)" }}>
-              {c.humanVerdict}
-            </span>
-          </p>
-          {c.humanNotes && <p className="text-[color:var(--ink)]/70 mt-2 font-mono text-sm">{c.humanNotes}</p>}
-          <p className="font-mono text-xs text-muted mt-3">
-            {c.humanDecidedAt && new Date(c.humanDecidedAt).toLocaleString("en-GB")}
-          </p>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function KV({ k, v, tone = "neutral" }: { k: string; v: string; tone?: "good" | "warn" | "neutral" }) {
-  const colour = tone === "good" ? "var(--approve)" : tone === "warn" ? "var(--decline)" : "var(--ink)";
-  return (
-    <div className="flex justify-between items-baseline py-1.5 hair-b last:border-0">
-      <span className="text-xs text-muted">{k}</span>
-      <span className="font-mono text-sm" style={{ color: colour }}>
-        {v}
-      </span>
     </div>
   );
 }

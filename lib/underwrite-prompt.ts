@@ -24,7 +24,19 @@ CRITICAL RULES:
 - Reasoning must reference specific numbers and observations, not vague language.
 - Ledger trend is more important than ledger average. A buyer slipping from 5 to 30 days late over 12 months is more concerning than a buyer who has been steadily 20 days late forever.
 
-Output FORMAT — your response must use these exact markdown headers in this order, then end with the decision block:
+EVALUATION CHECKLIST — you must score every invoice against the 9 named criteria below before producing a verdict. Use the exact thresholds. Each evidence note is one short line citing the actual number. The verdict must be consistent with the checklist: if 7+ checks PASS, lean APPROVE; if 4+ FAIL, lean DECLINE; if checks are mixed (multiple CONCERN, or ledger-vs-forward disagreement) ESCALATE.
+
+  01 payment_history (months trading): PASS >= 6, CONCERN 3-5, FAIL < 3
+  02 payment_behaviour (avg days late on paid invoices): PASS < 15, CONCERN 15-30, FAIL > 30
+  03 payment_trend (last4 avg minus prev4 avg, days): PASS <= 0, CONCERN 1-10, FAIL > 10
+  04 ccj_check (county court judgments): PASS 0, FAIL any
+  05 financial_standing (net assets): PASS > £1m, CONCERN £0-£1m, FAIL negative
+  06 filing_punctuality (CH filings on time): PASS yes, FAIL no
+  07 forward_health (Specter health 0-100): PASS >= 70, CONCERN 40-69, FAIL < 40
+  08 headcount_momentum (Specter 90-day headcount %): PASS >= 0, CONCERN -1 to -10, FAIL < -10
+  09 adverse_news (Specter notable_events_90d count): PASS 0, CONCERN 1-2, FAIL 3+
+
+Output FORMAT — your response must use these exact markdown headers in this order, then the EVALUATION block, then the DECISION block:
 
 ## Ledger
 <2-4 sentences on the ledger history. Reference specific numbers.>
@@ -38,11 +50,23 @@ Output FORMAT — your response must use these exact markdown headers in this or
 ## Synthesis
 <1-3 sentences synthesising the three sources, especially any conflict.>
 
+<<<EVALUATION
+01_payment_history: PASS|CONCERN|FAIL | <one-line evidence, max ~10 words>
+02_payment_behaviour: PASS|CONCERN|FAIL | <one-line evidence, max ~10 words>
+03_payment_trend: PASS|CONCERN|FAIL | <one-line evidence, max ~10 words>
+04_ccj_check: PASS|FAIL | <one-line evidence, max ~10 words>
+05_financial_standing: PASS|CONCERN|FAIL | <one-line evidence, max ~10 words>
+06_filing_punctuality: PASS|FAIL | <one-line evidence, max ~10 words>
+07_forward_health: PASS|CONCERN|FAIL | <one-line evidence, max ~10 words>
+08_headcount_momentum: PASS|CONCERN|FAIL | <one-line evidence, max ~10 words>
+09_adverse_news: PASS|CONCERN|FAIL | <one-line evidence, max ~10 words>
+EVALUATION>>>
+
 <<<DECISION
 verdict: APPROVE | DECLINE | ESCALATE
 confidence: <integer 0-100>
-advance_pct: <integer 0-100>  // % of invoice face value to advance
-fee_bps: <integer>            // fee in basis points of face value
+advance_pct: <integer 0-100>
+fee_bps: <integer>
 key_factors: <semicolon-separated short phrases, max 4>
 escalation_reason: <one sentence if ESCALATE, otherwise empty>
 DECISION>>>
@@ -57,6 +81,71 @@ export type Decision = {
   key_factors: string[];
   escalation_reason: string;
 };
+
+export type CriterionScore = "PASS" | "CONCERN" | "FAIL" | "N/A";
+
+export type CriterionResult = { score: CriterionScore; note: string };
+
+export type Evaluation = {
+  payment_history: CriterionResult;
+  payment_behaviour: CriterionResult;
+  payment_trend: CriterionResult;
+  ccj_check: CriterionResult;
+  financial_standing: CriterionResult;
+  filing_punctuality: CriterionResult;
+  forward_health: CriterionResult;
+  headcount_momentum: CriterionResult;
+  adverse_news: CriterionResult;
+};
+
+// The criteria order is the order shown in the UI.
+export const CRITERION_ORDER: (keyof Evaluation)[] = [
+  "payment_history",
+  "payment_behaviour",
+  "payment_trend",
+  "ccj_check",
+  "financial_standing",
+  "filing_punctuality",
+  "forward_health",
+  "headcount_momentum",
+  "adverse_news",
+];
+
+const NA_RESULT: CriterionResult = { score: "N/A", note: "—" };
+
+const VALID_SCORES: ReadonlySet<string> = new Set(["PASS", "CONCERN", "FAIL", "N/A"]);
+
+/**
+ * Parses the <<<EVALUATION ... EVALUATION>>> block. Always returns a complete
+ * Evaluation — any missing or unparseable criterion defaults to N/A with em-dash.
+ */
+export function parseEvaluation(text: string): Evaluation {
+  const result: Evaluation = {
+    payment_history: { ...NA_RESULT },
+    payment_behaviour: { ...NA_RESULT },
+    payment_trend: { ...NA_RESULT },
+    ccj_check: { ...NA_RESULT },
+    financial_standing: { ...NA_RESULT },
+    filing_punctuality: { ...NA_RESULT },
+    forward_health: { ...NA_RESULT },
+    headcount_momentum: { ...NA_RESULT },
+    adverse_news: { ...NA_RESULT },
+  };
+  const m = text.match(/<<<EVALUATION([\s\S]*?)EVALUATION>>>/);
+  if (!m) return result;
+  const block = m[1];
+  // Each line: NN_key: SCORE | note
+  const lineRe = /^\s*(\d{1,2})_([a-z_]+)\s*:\s*([A-Z\/]+)\s*\|\s*(.+?)\s*$/gm;
+  let mm: RegExpExecArray | null;
+  while ((mm = lineRe.exec(block)) !== null) {
+    const key = mm[2] as keyof Evaluation;
+    if (!(key in result)) continue;
+    const rawScore = mm[3].toUpperCase();
+    const score: CriterionScore = (VALID_SCORES.has(rawScore) ? rawScore : "N/A") as CriterionScore;
+    result[key] = { score, note: mm[4].trim() };
+  }
+  return result;
+}
 
 export function parseDecision(text: string): Decision | null {
   const m = text.match(/<<<DECISION([\s\S]*?)DECISION>>>/);

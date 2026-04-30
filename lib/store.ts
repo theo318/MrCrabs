@@ -1,4 +1,4 @@
-import type { Decision } from "./underwrite-prompt";
+import type { Decision, Evaluation } from "./underwrite-prompt";
 
 export type Case = {
   id: string;
@@ -10,6 +10,7 @@ export type Case = {
   createdAt: string;
   reasoning: string;
   decision: Decision;
+  evaluation: Evaluation;
   specterSnapshot: any;
   ledgerSnapshot: any;
   chSnapshot: any;
